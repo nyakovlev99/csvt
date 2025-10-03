@@ -1,0 +1,3 @@
+- wcmd: `0x0a00282800000000`
+- acmd: `0x00500a0a00010000`
+- expects 160 results per user
