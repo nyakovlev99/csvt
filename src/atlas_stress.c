@@ -81,6 +81,47 @@ typedef struct {
     __m512i*            pchannels[N_PCHANNELS];
 } archer_t;
 
+static pthread_mutex_t stdout_lock;
+
+void* run_archer_threaded(void* arg) {
+    archer_t* archer = (archer_t*)arg;
+
+    pthread_mutex_lock(&stdout_lock);
+    printf("Loading A-mem...\n");
+    pthread_mutex_unlock(&stdout_lock);
+    __m512i amem_pattern_1 = _mm512_set1_epi16(0xaaaa);
+    __m512i amem_pattern_2 = _mm512_set1_epi16(0x5555);
+    __m512i* amem = (__m512i*)((uint64_t)(archer->vfio_device.regions[2].mem) + AMEM_BASE);
+    for (int i=0; i<N_AMEM_WORDS; i++) {
+        // _mm512_store_si512(&(amem[i]), ((i / 16) % 2 == 0) ? amem_pattern_1 : amem_pattern_2);
+        _mm512_store_si512(&(amem[i]), ((i / 4) % 2 == 0) ? amem_pattern_1 : amem_pattern_2);
+    }
+
+    pthread_mutex_lock(&stdout_lock);
+    printf("Loading HBM...\n");
+    pthread_mutex_unlock(&stdout_lock);
+    __m512i hbm_pattern_1 = _mm512_set1_epi16(0xaaaa);
+    __m512i hbm_pattern_2 = _mm512_set1_epi16(0x5555);
+    for (int i=0; i<N_PCHANNELS; i++) {
+        __m512i* pchan = archer->pchannels[i];
+        for (int j=0; j<131072; j++) {
+            _mm512_store_si512(&(pchan[j]), (i % 2 == 0) ? hbm_pattern_1 : hbm_pattern_2);
+        }
+    }
+
+    pthread_mutex_lock(&stdout_lock);
+    printf("Running workload...\n");
+    pthread_mutex_unlock(&stdout_lock);
+    while (1) {
+        *archer->wcmd = WCMD;
+        *archer->acmd = ACMD;
+        while (*archer->n_results < RESULTS_PER_OP) {}
+        for (int i=0; i<RESULTS_PER_OP; i++) *archer->rmem_pop;
+    }
+
+    pthread_exit(NULL);
+}
+
 int run_main(int argc, char** argv) {
     printf("Running stress test...\n");
 
@@ -88,6 +129,8 @@ int run_main(int argc, char** argv) {
     vfio_container_t    ctr;
     pci_device_t        pci_devices     [MAX_DEVICES];
     archer_t            archers         [MAX_DEVICES];
+
+    pthread_mutex_init(&stdout_lock, NULL);
 
     if (vfio_container_create(&ctr) < 0) return -1;
     
@@ -137,77 +180,17 @@ int run_main(int argc, char** argv) {
         printf("DMA Version: %02x.%02x.%02x\n", dma_version.major, dma_version.minor, dma_version.patch);
     }
 
-    archer_t* archer = &(archers[2]);
-    __m512i amem_pattern_1 = _mm512_set1_epi16(0xaaaa);
-    __m512i amem_pattern_2 = _mm512_set1_epi16(0x5555);
-    // __m512i amem_pattern_1 = _mm512_set_epi16(
-    //     0x2AAE, 0xd555, 0xAAAb, 0x5554, 0xAAAA, 0x5554, 0x2AAb, 0xd555,
-    //     0x2AAE, 0xd555, 0xAAAb, 0x5554, 0xAAAA, 0x5554, 0x2AAb, 0xd555,
-    //     0x2AAE, 0xd555, 0xAAAb, 0x5554, 0xAAAA, 0x5554, 0x2AAb, 0xd555,
-    //     0x2AAE, 0xd555, 0xAAAb, 0x5554, 0xAAAA, 0x5554, 0x2AAb, 0xd555
-    // );
-    // __m512i amem_pattern_2 = _mm512_set_epi16(
-    //     0x5554, 0x2AAb, 0xd555, 0x2AAE, 0xd555, 0xAAAb, 0x5554, 0xAAAA,
-    //     0x5554, 0x2AAb, 0xd555, 0x2AAE, 0xd555, 0xAAAb, 0x5554, 0xAAAA,
-    //     0x5554, 0x2AAb, 0xd555, 0x2AAE, 0xd555, 0xAAAb, 0x5554, 0xAAAA,
-    //     0x5554, 0x2AAb, 0xd555, 0x2AAE, 0xd555, 0xAAAb, 0x5554, 0xAAAA
-    // );
-
-    printf("Loading A-mem...\n");
-    __m512i* amem = (__m512i*)((uint64_t)(archer->vfio_device.regions[2].mem) + AMEM_BASE);
-    for (int i=0; i<N_AMEM_WORDS; i++) {
-        // _mm512_store_si512(&(amem[i]), ((i / 16) % 2 == 0) ? amem_pattern_1 : amem_pattern_2);
-        _mm512_store_si512(&(amem[i]), ((i / 4) % 2 == 0) ? amem_pattern_1 : amem_pattern_2);
+    pthread_t threads[MAX_DEVICES];
+    for (int i=0; i<n_devices; i++) {
+        archer_t* archer = &(archers[i]);
+        pthread_create(&(threads[i]), NULL, run_archer_threaded, archer);
     }
-
-    printf("Loading HBM...\n");
-    __m512i hbm_pattern_1 = _mm512_set1_epi16(0xaaaa);
-    __m512i hbm_pattern_2 = _mm512_set1_epi16(0x5555);
-    for (int i=0; i<N_PCHANNELS; i++) {
-        __m512i* pchan = archer->pchannels[i];
-        for (int j=0; j<131072; j++) {
-            _mm512_store_si512(&(pchan[j]), (i % 2 == 0) ? hbm_pattern_1 : hbm_pattern_2);
-        }
-    }
-
-    // *archer->wcmd = WCMD;
-    // *archer->acmd = ACMD;
-    // sleep(1);
-    // for (int i=0; i<15; i++) *archer->rmem_pop;
-    // printf("Results: %d\n", *archer->n_results);
-
-    printf("Running workload...\n");
-    pthread
-
-    // int n_inflight = 0;
-    // int n_total = RESULTS_PER_OP * 8;
-    // for (int i=0; i<100000000; i++) {
-    //     while (n_inflight < n_total) {
-    //         *archer->wcmd = WCMD;
-    //         *archer->acmd = ACMD;
-    //         n_inflight += RESULTS_PER_OP;
-    //     }
-    //     uint16_t n_results = *archer->n_results;
-    //     for (int i=0; i<n_results; i++) *archer->rmem_pop;
-    //     n_inflight -= n_results;
-    //     // while (*archer->n_results < RESULTS_PER_OP) {}
-    //     // for (int i=0; i<RESULTS_PER_OP; i++) *archer->rmem_pop;
-    // }
-
-    return 0;
-}
-
-void run_archer_threaded(void* arg) {
-    archer_t* archer = (archer_t*)arg;
 
     while (1) {
-        *archer->wcmd = WCMD;
-        *archer->acmd = ACMD;
-        while (*archer->n_results < RESULTS_PER_OP) {}
-        for (int i=0; i<RESULTS_PER_OP; i++) *archer->rmem_pop;
+        sleep(1);
     }
 
-    pthread_exit(NULL);
+    return 0;
 }
 
 int main(int argc, char** argv) {
