@@ -5,7 +5,8 @@ SCRIPTS := atlas-stress
 
 LIBS := \
 	vfio_utils \
-	pci_utils
+	pci_utils \
+	dma
 
 LIB_PATHS := $(patsubst %,src/%.c,$(LIBS))
 

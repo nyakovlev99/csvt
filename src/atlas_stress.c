@@ -1,15 +1,84 @@
+#include "dma.h"
 #include "pci_utils.h"
 #include "vfio_utils.h"
 #include <stdio.h>
 #include <immintrin.h>
+#include <unistd.h>
+#include <pthread.h>
 
-#define POSITRON_VENDOR_ID 0x8200
-#define MAX_DEVICES 16
+#define POSITRON_VENDOR_ID  0x8200
+#define MAX_DEVICES         16
+#define DMA_BAR             0
+#define CSR_BAR             2
+#define HBM_BAR             4
+#define AMEM_BASE           0x30000000
+#define RMEM_BASE           0x20000000
+#define N_AMEM_WORDS        2048
+#define VIRT_BAR_BASE_2     0x4000000000
+#define VIRT_BAR_BASE_4     0x8000000000
+
+// #define WCMD 0x40000a0000000000
+// #define WCMD 0x40000a0000000000
+#define WCMD 0x4000060000000000  // best
+// #define WCMD 0x0040040400000000
+
+// #define ACMD 0x0200028000010000
+// #define ACMD 0x0200028000080000  // Batch 8
+#define ACMD 0x0200018000010000  // best
+// #define ACMD 0x0200018000010000
+
+// #define RESULTS_PER_OP 16
+// #define RESULTS_PER_OP 128
+#define RESULTS_PER_OP 8  // best
+// #define RESULTS_PER_OP 8
+
+#define N_PCHANNELS 32
+static uint64_t PCHANNEL_BASES[N_PCHANNELS] = {
+    0x000000000,
+    0x048000000,
+    0x090000000,
+    0x0d8000000,
+    0x120000000,
+    0x168000000,
+    0x1b0000000,
+    0x1f8000000,
+    0x240000000,
+    0x288000000,
+    0x2d0000000,
+    0x318000000,
+    0x360000000,
+    0x3a8000000,
+    0x3f0000000,
+    0x438000000,
+    0x800000000,
+    0x848000000,
+    0x890000000,
+    0x8d8000000,
+    0x920000000,
+    0x968000000,
+    0x9b0000000,
+    0x9f8000000,
+    0xa40000000,
+    0xa88000000,
+    0xad0000000,
+    0xb18000000,
+    0xb60000000,
+    0xba8000000,
+    0xbf0000000,
+    0xc38000000,
+};
 
 typedef struct {
-    pci_device_t*   pci_device;
-    vfio_group_t    vfio_group;
-    vfio_device_t   vfio_device;
+    pci_device_t*       pci_device;
+    vfio_group_t        vfio_group;
+    vfio_device_t       vfio_device;
+    volatile uint64_t*  id_dat;
+    volatile uint64_t*  wcmd;
+    volatile uint64_t*  acmd;
+    volatile uint16_t*  n_results;
+    volatile uint32_t*  rmem_pop;
+    dma_global_csr_t    dma_global_csr;
+    __m512i*            pchannels[N_PCHANNELS];
 } archer_t;
 
 int run_main(int argc, char** argv) {
@@ -46,11 +115,99 @@ int run_main(int argc, char** argv) {
 
         if (vfio_group_create(&(archer->vfio_group), &ctr, vfio_path) < 0) return -3;
         if (vfio_device_add(&(archer->vfio_device), &(archer->vfio_group), dbdf) < 0) return -4;
-        if (vfio_device_region_attach(&(archer->vfio_device), 2) < 0) return -5;
-        if (vfio_device_enable(&(archer->vfio_device)) < 0) return -5;
+        if (vfio_device_region_attach(&(archer->vfio_device), DMA_BAR) < 0) return -5;
+        if (vfio_device_region_attach(&(archer->vfio_device), CSR_BAR) < 0) return -6;
+        if (vfio_device_region_attach(&(archer->vfio_device), HBM_BAR) < 0) return -7;
+        if (vfio_device_enable(&(archer->vfio_device)) < 0) return -8;
+
+        archer->id_dat      = (uint64_t*)((uint64_t)(archer->vfio_device.regions[CSR_BAR].mem) + 0x0);
+        archer->wcmd        = (uint64_t*)((uint64_t)(archer->vfio_device.regions[CSR_BAR].mem) + 0x700200);
+        archer->acmd        = (uint64_t*)((uint64_t)(archer->vfio_device.regions[CSR_BAR].mem) + 0x700300);
+        archer->n_results   = (uint16_t*)((uint64_t)(archer->vfio_device.regions[CSR_BAR].mem) + 0x700400);
+        archer->rmem_pop    = (uint32_t*)((uint64_t)(archer->vfio_device.regions[CSR_BAR].mem) + RMEM_BASE);
+        for (int pchan_idx=0; pchan_idx<N_PCHANNELS; pchan_idx++) {
+            archer->pchannels[pchan_idx] = (__m512i*)((uint64_t)(archer->vfio_device.regions[HBM_BAR].mem) + PCHANNEL_BASES[pchan_idx]);
+        }
+
+        dma_global_csr_create(&(archer->dma_global_csr), archer->vfio_device.regions[DMA_BAR].mem);
+
+        printf("ID_DAT: %016lx\n", *archer->id_dat);
+        dma_version_t dma_version;
+        dma_global_csr_version(&(archer->dma_global_csr), &dma_version);
+        printf("DMA Version: %02x.%02x.%02x\n", dma_version.major, dma_version.minor, dma_version.patch);
     }
 
+    archer_t* archer = &(archers[2]);
+    __m512i amem_pattern_1 = _mm512_set1_epi16(0xaaaa);
+    __m512i amem_pattern_2 = _mm512_set1_epi16(0x5555);
+    // __m512i amem_pattern_1 = _mm512_set_epi16(
+    //     0x2AAE, 0xd555, 0xAAAb, 0x5554, 0xAAAA, 0x5554, 0x2AAb, 0xd555,
+    //     0x2AAE, 0xd555, 0xAAAb, 0x5554, 0xAAAA, 0x5554, 0x2AAb, 0xd555,
+    //     0x2AAE, 0xd555, 0xAAAb, 0x5554, 0xAAAA, 0x5554, 0x2AAb, 0xd555,
+    //     0x2AAE, 0xd555, 0xAAAb, 0x5554, 0xAAAA, 0x5554, 0x2AAb, 0xd555
+    // );
+    // __m512i amem_pattern_2 = _mm512_set_epi16(
+    //     0x5554, 0x2AAb, 0xd555, 0x2AAE, 0xd555, 0xAAAb, 0x5554, 0xAAAA,
+    //     0x5554, 0x2AAb, 0xd555, 0x2AAE, 0xd555, 0xAAAb, 0x5554, 0xAAAA,
+    //     0x5554, 0x2AAb, 0xd555, 0x2AAE, 0xd555, 0xAAAb, 0x5554, 0xAAAA,
+    //     0x5554, 0x2AAb, 0xd555, 0x2AAE, 0xd555, 0xAAAb, 0x5554, 0xAAAA
+    // );
+
+    printf("Loading A-mem...\n");
+    __m512i* amem = (__m512i*)((uint64_t)(archer->vfio_device.regions[2].mem) + AMEM_BASE);
+    for (int i=0; i<N_AMEM_WORDS; i++) {
+        // _mm512_store_si512(&(amem[i]), ((i / 16) % 2 == 0) ? amem_pattern_1 : amem_pattern_2);
+        _mm512_store_si512(&(amem[i]), ((i / 4) % 2 == 0) ? amem_pattern_1 : amem_pattern_2);
+    }
+
+    printf("Loading HBM...\n");
+    __m512i hbm_pattern_1 = _mm512_set1_epi16(0xaaaa);
+    __m512i hbm_pattern_2 = _mm512_set1_epi16(0x5555);
+    for (int i=0; i<N_PCHANNELS; i++) {
+        __m512i* pchan = archer->pchannels[i];
+        for (int j=0; j<131072; j++) {
+            _mm512_store_si512(&(pchan[j]), (i % 2 == 0) ? hbm_pattern_1 : hbm_pattern_2);
+        }
+    }
+
+    // *archer->wcmd = WCMD;
+    // *archer->acmd = ACMD;
+    // sleep(1);
+    // for (int i=0; i<15; i++) *archer->rmem_pop;
+    // printf("Results: %d\n", *archer->n_results);
+
+    printf("Running workload...\n");
+    pthread
+
+    // int n_inflight = 0;
+    // int n_total = RESULTS_PER_OP * 8;
+    // for (int i=0; i<100000000; i++) {
+    //     while (n_inflight < n_total) {
+    //         *archer->wcmd = WCMD;
+    //         *archer->acmd = ACMD;
+    //         n_inflight += RESULTS_PER_OP;
+    //     }
+    //     uint16_t n_results = *archer->n_results;
+    //     for (int i=0; i<n_results; i++) *archer->rmem_pop;
+    //     n_inflight -= n_results;
+    //     // while (*archer->n_results < RESULTS_PER_OP) {}
+    //     // for (int i=0; i<RESULTS_PER_OP; i++) *archer->rmem_pop;
+    // }
+
     return 0;
+}
+
+void run_archer_threaded(void* arg) {
+    archer_t* archer = (archer_t*)arg;
+
+    while (1) {
+        *archer->wcmd = WCMD;
+        *archer->acmd = ACMD;
+        while (*archer->n_results < RESULTS_PER_OP) {}
+        for (int i=0; i<RESULTS_PER_OP; i++) *archer->rmem_pop;
+    }
+
+    pthread_exit(NULL);
 }
 
 int main(int argc, char** argv) {
