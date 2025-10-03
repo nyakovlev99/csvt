@@ -25,3 +25,7 @@ $(OUTPUT_DIR)/verify_matmul: src/verify_matmul.c $(LIB_PATHS) | $(OUTPUT_DIR)
 
 $(OUTPUT_DIR)/atlas-stress: src/atlas_stress.c $(LIB_PATHS) | $(OUTPUT_DIR)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+.PHONY: clean
+clean:
+	rm -rf $(OUTPUT_DIR)

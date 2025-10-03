@@ -17,20 +17,23 @@
 #define VIRT_BAR_BASE_2     0x4000000000
 #define VIRT_BAR_BASE_4     0x8000000000
 
-// #define WCMD 0x40000a0000000000
+// #define WCMD 0x40000a0000000000  
 // #define WCMD 0x40000a0000000000
 #define WCMD 0x4000060000000000  // best
+// #define WCMD 0x0040040400000000
 // #define WCMD 0x0040040400000000
 
 // #define ACMD 0x0200028000010000
 // #define ACMD 0x0200028000080000  // Batch 8
 #define ACMD 0x0200018000010000  // best
 // #define ACMD 0x0200018000010000
+// #define ACMD 0x0200018000040000
 
 // #define RESULTS_PER_OP 16
 // #define RESULTS_PER_OP 128
 #define RESULTS_PER_OP 8  // best
 // #define RESULTS_PER_OP 8
+// #define RESULTS_PER_OP 32
 
 #define N_PCHANNELS 32
 static uint64_t PCHANNEL_BASES[N_PCHANNELS] = {
@@ -112,11 +115,25 @@ void* run_archer_threaded(void* arg) {
     pthread_mutex_lock(&stdout_lock);
     printf("Running workload...\n");
     pthread_mutex_unlock(&stdout_lock);
+
+    // while (1) {
+    //     *archer->wcmd = WCMD;
+    //     *archer->acmd = ACMD;
+    //     while (*archer->n_results < RESULTS_PER_OP) {}
+    //     for (int i=0; i<RESULTS_PER_OP; i++) *archer->rmem_pop;
+    // }
+
+    int n_inflight = 0;
+    int n_total = RESULTS_PER_OP * 32;
     while (1) {
-        *archer->wcmd = WCMD;
-        *archer->acmd = ACMD;
-        while (*archer->n_results < RESULTS_PER_OP) {}
-        for (int i=0; i<RESULTS_PER_OP; i++) *archer->rmem_pop;
+        while (n_inflight < n_total) {
+            *archer->wcmd = WCMD;
+            *archer->acmd = ACMD;
+            n_inflight += RESULTS_PER_OP;
+        }
+        uint16_t n_results = *archer->n_results;
+        for (int i=0; i<n_results; i++) *archer->rmem_pop;
+        n_inflight -= n_results;
     }
 
     pthread_exit(NULL);
