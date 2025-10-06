@@ -16,40 +16,46 @@ typedef struct {
 } dma_version_t;
 
 typedef struct {
-    // void* io;
-    // void* field_interrupt_enable;
-    // void* field_writeback_enable;
-    // void* field_enable;
-    // uint64_t ptr_start_addr;
-    // void* field_size;
-    // void* field_tail_ptr;
-    // void* field_head_ptr;
-    // void* field_completed_ptr;
-    // uint64_t ptr_consumed_head_addr;
-    // void* field_batch_delay;
-    // void* field_data_drop_err_status;
-    // void* field_data_err_avmm;
-    // void* field_data_err_avst;
-    // void* field_data_drop_err_count;
-    // void* field_payload_count;
-    // void* field_reset;
 
-    // // values for transfer access
-    // void* ring_base;
-    // uint16_t* completed_ptr;
-    // uint16_t* tail_ptr;
+    volatile uint64_t* reg_start_addr;
+    volatile uint64_t* reg_consumed_head_addr;
+    volatile uint32_t* reg_enable;
+    volatile uint32_t* reg_size;
+    volatile uint32_t* reg_tail_ptr;
+    volatile uint32_t* reg_head_ptr;
+    volatile uint32_t* reg_completed_ptr;
+    volatile uint32_t* reg_batch_delay;
+    volatile uint32_t* reg_error_counters;
+    volatile uint32_t* reg_payload_count;
+    volatile uint32_t* reg_reset;
 
-    // uint32_t size;
-    // uint32_t completed;
-    // uint32_t last_tail;
-    // uint32_t tail;
-    // uint16_t ring_mask;
+    volatile uint64_t* ring;
+    uint32_t           size;
+    uint32_t           completed;
+    uint32_t           last_tail;
+    uint32_t           tail;
+    uint16_t           ring_mask;
+
 } dma_queue_csr_t;
 
 void dma_global_csr_create(dma_global_csr_t* csr, void* mem);
 void dma_global_csr_version(dma_global_csr_t* csr, dma_version_t* version);
-int dma_global_csr_reset(dma_global_csr_t* csr);
+int  dma_global_csr_reset(dma_global_csr_t* csr);
 
-void dma_queue_csr_create(dma_queue_csr_t* csr, void* mem, uint64_t base);
+void dma_queue_csr_create(dma_queue_csr_t* csr, void* bar, uint64_t base);
+int dma_queue_csr_start(
+    dma_queue_csr_t* csr,
+    void* ring,
+    uint64_t virtual_ring_base,
+    uint32_t width
+);
+int dma_queue_csr_flush(dma_queue_csr_t* csr);
+int dma_queue_csr_reset(dma_queue_csr_t* csr);
+int dma_queue_csr_transfer(
+    dma_queue_csr_t* csr,
+    uint64_t dst_addr,
+    uint64_t src_addr,
+    uint64_t num_bytes
+);
 
 #endif  // __DMA_INCLUDE__
