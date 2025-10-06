@@ -50,7 +50,7 @@ int vfio_group_create(vfio_group_t* vfio_group, vfio_container_t* container, cha
     return 0;
 }
 
-int vfio_group_map_create(vfio_group_t* vfio_group, void* addr, uint64_t size, void* virtual_addr) {
+int vfio_group_map_create(vfio_group_t* vfio_group, void* addr, uint64_t size, uint64_t virtual_addr) {
     struct vfio_iommu_type1_dma_map dma_map = {
         .argsz = sizeof(dma_map),
         .vaddr = (uint64_t)addr,

@@ -1,7 +1,9 @@
 #include "dma.h"
+#include "vfio_utils.h"
 
 #include <stdint.h>
 #include <stdio.h>
+#include <sys/mman.h>
 #include <unistd.h>
 
 #define MIN(a,b)    (((a)<(b))?(a):(b))
@@ -9,16 +11,15 @@
 #define likely(x)   __builtin_expect(!!(x), 1)
 #define unlikely(x) __builtin_expect(!!(x), 0)
 
-#define DMA_GLOBAL_CSR_BASE     0x200000
-#define DMA_D2H_QUEUE_CSR_BASE  0x0
-#define DMA_H2D_QUEUE_CSR_BASE  0x80000
-
-#define BATCH_DELAY     1
-#define TRANSFER_MASK   0x7ffff
-#define TRANSFER_BYTES  524288
-#define TRANSFER_SHIFT  19
-#define TRANSFER_STRIDE 0x80000
-#define MAX_BATCH       40
+#define DMA_GLOBAL_CSR_BASE 0x200000
+#define DMA_POOL_SIZE       1024 * 1024 * 1024 * 1  // 1 GB
+#define DMA_DESCRIPTOR_SIZE 32
+#define BATCH_DELAY         1
+#define TRANSFER_MASK       0x7ffff
+#define TRANSFER_BYTES      524288
+#define TRANSFER_SHIFT      19
+#define TRANSFER_STRIDE     0x80000
+#define MAX_BATCH           40
 
 void dma_global_csr_create(dma_global_csr_t* csr, void* bar) {
     csr->writeback_delay    = (uint32_t*)((uint64_t)bar + DMA_GLOBAL_CSR_BASE + 0x8);
@@ -51,6 +52,9 @@ void dma_queue_csr_create(dma_queue_csr_t* csr, void* bar, uint64_t base) {
     csr->reg_error_counters     = (uint32_t*)((uint64_t)bar + base + 0x40);
     csr->reg_payload_count      = (uint32_t*)((uint64_t)bar + base + 0x44);
     csr->reg_reset              = (uint32_t*)((uint64_t)bar + base + 0x48);
+
+    csr->virtual_ring_base = 0x100000;
+    csr->is_d2h = base < DMA_H2D_QUEUE_CSR_BASE;
 }
 
 int dma_queue_csr_reset(dma_queue_csr_t* csr) {
@@ -93,24 +97,32 @@ static void dma_descriptor_write(
         ((link & 0b1) << 63);
 }
 
-int dma_queue_csr_start(
-    dma_queue_csr_t* csr,
-    void* ring,
-    uint64_t virtual_ring_base,
-    uint32_t width
-) {
-    csr->ring = (uint64_t*)ring;
-    csr->size = (1 << width);
+int dma_queue_csr_start(dma_queue_csr_t* csr, vfio_group_t* vfio_group, uint32_t ring_width) {
+    
+    csr->size = (1 << ring_width);
+
+    csr->pool = mmap(
+        0,
+        DMA_POOL_SIZE,
+        PROT_READ | PROT_WRITE,
+        MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB,
+        0,
+        0
+    );
+    csr->ring = (uint64_t*)(csr->pool);
+    csr->buffer = (void*)((uint64_t)csr->pool + csr->size * DMA_DESCRIPTOR_SIZE);
+    if (vfio_group_map_create(vfio_group, csr->pool, DMA_POOL_SIZE, csr->virtual_ring_base)) return -1;
+
     csr->tail = 1;
     csr->last_tail = 1;
     csr->completed = 1;
-    csr->ring_mask = (1 << width) - 1;
+    csr->ring_mask = (1 << ring_width) - 1;
 
     // Last chaining descriptor (points to the start of the ring)
     dma_descriptor_write(
         csr,
         csr->size,
-        virtual_ring_base,
+        csr->virtual_ring_base,
         0,
         TRANSFER_BYTES,
         (uint64_t)csr->tail,
@@ -123,9 +135,9 @@ int dma_queue_csr_start(
         1
     );
 
-    if (dma_queue_csr_reset(csr) < 0) return -1;
-    *csr->reg_start_addr    = virtual_ring_base;
-    *csr->reg_size          = width;
+    if (dma_queue_csr_reset(csr) < 0) return -2;
+    *csr->reg_start_addr    = csr->virtual_ring_base;
+    *csr->reg_size          = ring_width;
     *csr->reg_batch_delay   = BATCH_DELAY;
     *csr->reg_enable        = 1;
 
@@ -169,6 +181,12 @@ int dma_queue_csr_transfer(
     uint64_t src_addr,
     uint64_t num_bytes
 ) {
+    if (csr->is_d2h) {
+        dst_addr = dst_addr - ((uint64_t)csr->pool) + csr->virtual_ring_base;
+    } else {
+        src_addr = src_addr - ((uint64_t)csr->pool) + csr->virtual_ring_base;
+    }
+
     uint32_t room = 0;
     uint64_t num_descs = ((num_bytes + TRANSFER_BYTES - 1) >> TRANSFER_SHIFT);
     uint64_t transfer_remainder = num_bytes & TRANSFER_MASK;

@@ -1,4 +1,5 @@
 #include "archer.h"
+#include "dma.h"
 #include <stdio.h>
 
 int archer_enumerate(
@@ -50,7 +51,11 @@ int archer_enumerate(
         dma_version_t dma_version;
         dma_global_csr_version(&(archer->dma_global_csr), &dma_version);
 
-        // TODO: allocate a hugepage for DMA and start the ring
+        dma_queue_csr_create(&(archer->dma_h2d), archer->vfio_device.regions[DMA_BAR].mem, DMA_H2D_QUEUE_CSR_BASE);
+        dma_queue_csr_create(&(archer->dma_d2h), archer->vfio_device.regions[DMA_BAR].mem, DMA_D2H_QUEUE_CSR_BASE);
+
+        if (dma_queue_csr_start(&(archer->dma_h2d), &(archer->vfio_group), 7) < 0) return -8;
+        if (dma_queue_csr_start(&(archer->dma_d2h), &(archer->vfio_group), 7) < 0) return -9;
 
         printf(
             "Archer device: %s (vfio:%s); id_dat=%016lx, dma version: %02x.%02x.%02x\n",

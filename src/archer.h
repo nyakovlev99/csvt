@@ -65,6 +65,8 @@ typedef struct {
     volatile uint16_t*  n_results;
     volatile uint32_t*  rmem_pop;
     dma_global_csr_t    dma_global_csr;
+    dma_queue_csr_t     dma_h2d;
+    dma_queue_csr_t     dma_d2h;
     __m512i*            pchannels[N_PCHANNELS];
 } archer_t;
 
