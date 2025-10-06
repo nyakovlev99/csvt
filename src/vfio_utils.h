@@ -30,6 +30,7 @@ typedef struct {
     vfio_region_t           regions[VFIO_PCI_NUM_REGIONS];
 } vfio_device_t;
 
+int vfio_init();
 int vfio_container_create(vfio_container_t* container);
 int vfio_group_create(vfio_group_t* vfio_group, vfio_container_t* container, char* vfio_path);
 int vfio_group_map_create(vfio_group_t* vfio_group, void* addr, uint64_t size, void* virtual_addr);

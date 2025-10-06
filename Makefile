@@ -1,12 +1,12 @@
 OUTPUT_DIR := obj
 
-# SCRIPTS := verify_matmul
-SCRIPTS := atlas-stress
+SCRIPTS := atlas-stress atlas-test
 
 LIBS := \
 	vfio_utils \
 	pci_utils \
-	dma
+	dma \
+	archer
 
 LIB_PATHS := $(patsubst %,src/%.c,$(LIBS))
 
@@ -24,6 +24,9 @@ $(OUTPUT_DIR)/verify_matmul: src/verify_matmul.c $(LIB_PATHS) | $(OUTPUT_DIR)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 $(OUTPUT_DIR)/atlas-stress: src/atlas_stress.c $(LIB_PATHS) | $(OUTPUT_DIR)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+$(OUTPUT_DIR)/atlas-test: src/atlas_test.c $(LIB_PATHS) | $(OUTPUT_DIR)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 .PHONY: clean

@@ -1,11 +1,23 @@
 #include "vfio_utils.h"
 
+#include <stdbool.h>
 #include <sys/mman.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
 #include <stdlib.h>
 #include <sys/eventfd.h>
+
+static bool global_vfio_initialized;
+static vfio_container_t global_vfio_container;
+
+int vfio_init() {
+    if (global_vfio_initialized) return 0;
+    int ret = vfio_container_create(&global_vfio_container);
+    if (ret < 0) return ret;
+    global_vfio_initialized = true;
+    return 0;
+}
 
 int vfio_container_create(vfio_container_t* container) {
     container->n_groups = 0;
@@ -16,6 +28,7 @@ int vfio_container_create(vfio_container_t* container) {
 }
 
 int vfio_group_create(vfio_group_t* vfio_group, vfio_container_t* container, char* vfio_path) {
+    if (!container) container = &global_vfio_container;
     vfio_group->status.argsz = sizeof(struct vfio_group_status);
 
     vfio_group->container = container;
