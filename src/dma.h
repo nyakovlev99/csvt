@@ -6,7 +6,6 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#define DMA_POOL_SIZE           1024 * 1024 * 1024 * 1  // 1 GB
 #define DMA_DESCRIPTOR_SIZE     32
 #define DMA_D2H_QUEUE_CSR_BASE  0x0
 #define DMA_H2D_QUEUE_CSR_BASE  0x80000
@@ -21,6 +20,7 @@ typedef struct {
     void*       mem;
     uint64_t    virtual_base;
     uint64_t    buffer_offset;
+    uint64_t    size;
 } dma_pool_t;
 
 typedef struct {
@@ -61,7 +61,8 @@ int  dma_global_csr_reset(dma_global_csr_t* csr);
 
 int dma_pool_create(
     dma_pool_t* pool,
-    vfio_group_t* vfio_group,
+    vfio_container_t* vfio_container,
+    uint64_t size,
     uint64_t virtual_base,
     uint64_t buffer_offset
 );

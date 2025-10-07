@@ -1,6 +1,8 @@
 #include "vfio_utils.h"
 
 #include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
 #include <sys/mman.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
@@ -50,7 +52,8 @@ int vfio_group_create(vfio_group_t* vfio_group, vfio_container_t* container, cha
     return 0;
 }
 
-int vfio_group_map_create(vfio_group_t* vfio_group, void* addr, uint64_t size, uint64_t virtual_addr) {
+int vfio_container_map_create(vfio_container_t* container, void* addr, uint64_t size, uint64_t virtual_addr) {
+    if (!container) container = &global_vfio_container;
     struct vfio_iommu_type1_dma_map dma_map = {
         .argsz = sizeof(dma_map),
         .vaddr = (uint64_t)addr,
@@ -58,7 +61,7 @@ int vfio_group_map_create(vfio_group_t* vfio_group, void* addr, uint64_t size, u
         .flags = VFIO_DMA_MAP_FLAG_READ | VFIO_DMA_MAP_FLAG_WRITE,
         .iova = (uint64_t)virtual_addr
     };
-    if (ioctl(vfio_group->container->fd, VFIO_IOMMU_MAP_DMA, &dma_map) < 0) return -1;
+    if (ioctl(container->fd, VFIO_IOMMU_MAP_DMA, &dma_map) < 0) return -1;
     return 0;
 }
 
@@ -196,7 +199,7 @@ int vfio_device_device_id_read(vfio_device_t* device, uint16_t* device_id) {
 }
 
 int vfio_device_enable(vfio_device_t* device) {
-    uint16_t command = 0x6;
+    uint16_t command = PCI_COMMAND_ENABLE_MEMORY | PCI_COMMAND_ENABLE_BUS_CONTROL;
     int ret = vfio_device_config_write(device, (uint8_t*)(&command), device->config_offset + 4, 2);
     if (ret < 0) return ret;
     return 0;

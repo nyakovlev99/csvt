@@ -8,20 +8,20 @@
 #include <stdint.h>
 #include <immintrin.h>
 
-#define POSITRON_VENDOR_ID  0x8200
-#define MAX_ARCHER_DEVICES  16
-#define DMA_BAR             0
-#define CSR_BAR             2
-#define HBM_BAR             4
-#define AMEM_BASE           0x30000000
-#define RMEM_BASE           0x20000000
-#define N_AMEM_WORDS        2048
-#define VIRT_BAR_BASE_2     0x4000000000
-#define VIRT_BAR_BASE_4     0x8000000000
-#define DMA_RING_WIDTH      7
-#define N_DMA_RINGS         2
-#define DMA_RING_SIZE       ((1 << DMA_RING_WIDTH) * DMA_DESCRIPTOR_SIZE)
-#define POOL_BUFFER_OFFSET  (DMA_RING_SIZE * N_DMA_RINGS)
+#define POSITRON_VENDOR_ID          0x8200
+#define MAX_ARCHER_DEVICES          16
+#define DMA_BAR                     0
+#define CSR_BAR                     2
+#define HBM_BAR                     4
+#define AMEM_BASE                   0x30000000
+#define RMEM_BASE                   0x20000000
+#define N_AMEM_WORDS                2048
+#define VIRT_BAR_BASE_2             0x4000000000
+#define VIRT_BAR_BASE_4             0x8000000000
+#define ARCHER_DMA_VIRTUAL_BASE     0x100000
+#define ARCHER_DMA_POOL_SIZE        (((uint64_t)1) * 1024 * 1024 * 1024)  // 1 GB
+#define ARCHER_DMA_RING_WIDTH       7
+#define ARCHER_DMA_RING_SIZE        ((1 << ARCHER_DMA_RING_WIDTH) * DMA_DESCRIPTOR_SIZE)
 
 #define N_PCHANNELS 32
 static uint64_t PCHANNEL_BASES[N_PCHANNELS] = {
@@ -69,13 +69,13 @@ typedef struct {
     volatile uint16_t*  n_results;
     volatile uint32_t*  rmem_pop;
     dma_global_csr_t    dma_global_csr;
-    dma_pool_t          dma_pool;
     dma_queue_csr_t     dma_h2d;
     dma_queue_csr_t     dma_d2h;
     __m512i*            pchannels[N_PCHANNELS];
 } archer_t;
 
 int archer_enumerate(
+    dma_pool_t* dma_pool,
     pci_device_t* pci_devices,
     archer_t* archers,
     int max_devices,

@@ -4,6 +4,9 @@
 #include <stdint.h>
 #include <linux/vfio.h>
 
+#define PCI_COMMAND_ENABLE_MEMORY       0x2
+#define PCI_COMMAND_ENABLE_BUS_CONTROL  0x4
+
 typedef struct {
     int fd;
     int n_groups;
@@ -32,8 +35,8 @@ typedef struct {
 
 int vfio_init();
 int vfio_container_create(vfio_container_t* container);
+int vfio_container_map_create(vfio_container_t* container, void* addr, uint64_t size, uint64_t virtual_addr);
 int vfio_group_create(vfio_group_t* vfio_group, vfio_container_t* container, char* vfio_path);
-int vfio_group_map_create(vfio_group_t* vfio_group, void* addr, uint64_t size, uint64_t virtual_addr);
 int vfio_device_add(vfio_device_t* device, vfio_group_t* vfio_group, char* dbdf);
 int vfio_device_num_regions(vfio_device_t* device, uint32_t* num_regions);
 int vfio_device_region_get(vfio_device_t* device, int index);

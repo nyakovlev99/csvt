@@ -40,26 +40,29 @@ int dma_global_csr_reset(dma_global_csr_t* csr) {
 
 int dma_pool_create(
     dma_pool_t* pool,
-    vfio_group_t* vfio_group,
+    vfio_container_t* container,
+    uint64_t size,
     uint64_t virtual_base,
     uint64_t buffer_offset
 ) {
     pool->virtual_base = virtual_base;
-    printf("1\n");
+    pool->buffer_offset = buffer_offset;
+    pool->size = size;
     pool->mem = mmap(
         0,
-        DMA_POOL_SIZE,
+        size,
         PROT_READ | PROT_WRITE,
         MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB,
         0,
         0
     );
-    if (vfio_group_map_create(
-        vfio_group,
+    if (pool->mem == MAP_FAILED) {fprintf(stderr, "Failed to mmap hugepage\n"); return -1;}
+    if (vfio_container_map_create(
+        container,
         pool->mem,
-        DMA_POOL_SIZE,
-        virtual_base
-    )) return -1;
+        pool->size,
+        pool->virtual_base
+    ) < 0) {fprintf(stderr, "Failed to map DMA pool into VFIO\n"); return -2;}
     return 0;
 }
 
@@ -86,6 +89,7 @@ int dma_queue_csr_reset(dma_queue_csr_t* csr) {
         if (*csr->reg_reset == 0) return 0;
         usleep(1000);
     }
+    fprintf(stderr, "DMA queue CSR did not deassert in a reasonable time\n");
     return -1;
 }
 
@@ -149,7 +153,7 @@ int dma_queue_csr_start(
         1
     );
 
-    if (dma_queue_csr_reset(csr) < 0) return -2;
+    if (dma_queue_csr_reset(csr) < 0) {fprintf(stderr, "DMA queue reset failed\n"); return -1;}
     *csr->reg_start_addr    = csr->pool->virtual_base + ring_offset;
     *csr->reg_size          = ring_width;
     *csr->reg_batch_delay   = BATCH_DELAY;
@@ -185,7 +189,7 @@ int dma_queue_csr_flush(dma_queue_csr_t* csr) {
     for (i=0; i<10000; i++) {
         if (*csr->reg_completed_ptr == *csr->reg_tail_ptr) return 0;
     }
-    printf("Ring timeout encountered: <%u:%u>\n", *csr->reg_tail_ptr, *csr->reg_completed_ptr);
+    fprintf(stderr, "Ring timeout encountered: <%u:%u>\n", *csr->reg_tail_ptr, *csr->reg_completed_ptr);
     return -1;
 }
 

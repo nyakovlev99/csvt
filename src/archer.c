@@ -1,16 +1,21 @@
 #include "archer.h"
 #include "dma.h"
+#include <stdint.h>
 #include <stdio.h>
 
 int archer_enumerate(
+    dma_pool_t* dma_pool,
     pci_device_t* pci_devices,
     archer_t* archers,
     int max_devices,
     int* n_devices
 ) {
-    if (vfio_init() < 0) return -1;
+    if (vfio_init() < 0) {fprintf(stderr, "VFIO init failed\n"); return -1;}
 
-    if (pci_enumerate_devices(POSITRON_VENDOR_ID, pci_devices, max_devices, n_devices) < 0) return -2;
+    if (pci_enumerate_devices(POSITRON_VENDOR_ID, pci_devices, max_devices, n_devices) < 0) {
+        fprintf(stderr, "Failed to enumerate PCI devices\n");
+        return -2;
+    }
 
     printf("Detected %d devices\n", *n_devices);
 
@@ -30,12 +35,12 @@ int archer_enumerate(
             pci_device->function
         );
 
-        if (vfio_group_create(&(archer->vfio_group), NULL, vfio_path) < 0) return -3;
-        if (vfio_device_add(&(archer->vfio_device), &(archer->vfio_group), dbdf) < 0) return -4;
-        if (vfio_device_region_attach(&(archer->vfio_device), DMA_BAR) < 0) return -5;
-        if (vfio_device_region_attach(&(archer->vfio_device), CSR_BAR) < 0) return -6;
-        if (vfio_device_region_attach(&(archer->vfio_device), HBM_BAR) < 0) return -7;
-        if (vfio_device_enable(&(archer->vfio_device)) < 0) return -8;
+        if (vfio_group_create(&(archer->vfio_group), NULL, vfio_path) < 0) {fprintf(stderr, "Failed to create VFIO group\n"); return -4;}
+        if (vfio_device_add(&(archer->vfio_device), &(archer->vfio_group), dbdf) < 0) {fprintf(stderr, "Failed to add VFIO device to group\n"); return -5;}
+        if (vfio_device_region_attach(&(archer->vfio_device), DMA_BAR) < 0) {fprintf(stderr, "Failed to attach DMA BAR\n"); return -6;}
+        if (vfio_device_region_attach(&(archer->vfio_device), CSR_BAR) < 0) {fprintf(stderr, "Failed to attach CSR BAR\n"); return -7;}
+        if (vfio_device_region_attach(&(archer->vfio_device), HBM_BAR) < 0) {fprintf(stderr, "Failed to attach HBM BAR\n"); return -8;}
+        if (vfio_device_enable(&(archer->vfio_device)) < 0) {fprintf(stderr, "Failed to enable VFIO device\n"); return -9;}
 
         archer->id_dat      = (uint64_t*)((uint64_t)(archer->vfio_device.regions[CSR_BAR].mem) + 0x0);
         archer->wcmd        = (uint64_t*)((uint64_t)(archer->vfio_device.regions[CSR_BAR].mem) + 0x700200);
@@ -51,28 +56,18 @@ int archer_enumerate(
         dma_version_t dma_version;
         dma_global_csr_version(&(archer->dma_global_csr), &dma_version);
 
-        if (dma_pool_create(
-            &(archer->dma_pool),
-            &(archer->vfio_group),
-            0x10000 + DMA_POOL_SIZE * i,
-            POOL_BUFFER_OFFSET
-        ) < 0) return -9;
-
         dma_queue_csr_create(
             &(archer->dma_h2d),
             archer->vfio_device.regions[DMA_BAR].mem,
             DMA_H2D_QUEUE_CSR_BASE,
-            &(archer->dma_pool)
+            dma_pool
         );
         dma_queue_csr_create(
             &(archer->dma_d2h),
             archer->vfio_device.regions[DMA_BAR].mem,
             DMA_D2H_QUEUE_CSR_BASE,
-            &(archer->dma_pool)
+            dma_pool
         );
-
-        if (dma_queue_csr_start(&(archer->dma_h2d), 0, 7) < 0) return -10;
-        if (dma_queue_csr_start(&(archer->dma_d2h), DMA_RING_SIZE, 7) < 0) return -11;
 
         printf(
             "Archer device: %s (vfio:%s); id_dat=%016lx, dma version: %02x.%02x.%02x\n",
@@ -82,5 +77,30 @@ int archer_enumerate(
             dma_version.major, dma_version.minor, dma_version.patch
         );
     }
+
+    if (dma_pool_create(
+        dma_pool,
+        NULL,
+        ARCHER_DMA_POOL_SIZE,
+        ARCHER_DMA_VIRTUAL_BASE,
+        ARCHER_DMA_RING_SIZE * 2 * *n_devices
+    ) < 0) {fprintf(stderr, "Failed to allocate DMA pool\n"); return -3;};
+
+    for (int i=0; i<*n_devices; i++) {
+        archer_t*       archer = &(archers[i]);
+
+        if (dma_queue_csr_start(
+            &(archer->dma_h2d),
+            ARCHER_DMA_RING_SIZE * 2 * i,
+            ARCHER_DMA_RING_WIDTH
+        ) < 0) {fprintf(stderr, "Failed to start H2D DMA queue\n"); return -11;}
+
+        if (dma_queue_csr_start(
+            &(archer->dma_d2h),
+            ARCHER_DMA_RING_SIZE * 2 * i + ARCHER_DMA_RING_SIZE,
+            ARCHER_DMA_RING_WIDTH
+        ) < 0) {fprintf(stderr, "Failed to start D2H DMA queue\n"); return -12;}
+    }
+
     return 0;
 }
