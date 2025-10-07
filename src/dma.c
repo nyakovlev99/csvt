@@ -12,8 +12,6 @@
 #define unlikely(x) __builtin_expect(!!(x), 0)
 
 #define DMA_GLOBAL_CSR_BASE 0x200000
-#define DMA_POOL_SIZE       1024 * 1024 * 1024 * 1  // 1 GB
-#define DMA_DESCRIPTOR_SIZE 32
 #define BATCH_DELAY         1
 #define TRANSFER_MASK       0x7ffff
 #define TRANSFER_BYTES      524288
@@ -40,7 +38,32 @@ int dma_global_csr_reset(dma_global_csr_t* csr) {
     return 0;
 }
 
-void dma_queue_csr_create(dma_queue_csr_t* csr, void* bar, uint64_t base) {
+int dma_pool_create(
+    dma_pool_t* pool,
+    vfio_group_t* vfio_group,
+    uint64_t virtual_base,
+    uint64_t buffer_offset
+) {
+    pool->virtual_base = virtual_base;
+    printf("1\n");
+    pool->mem = mmap(
+        0,
+        DMA_POOL_SIZE,
+        PROT_READ | PROT_WRITE,
+        MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB,
+        0,
+        0
+    );
+    if (vfio_group_map_create(
+        vfio_group,
+        pool->mem,
+        DMA_POOL_SIZE,
+        virtual_base
+    )) return -1;
+    return 0;
+}
+
+void dma_queue_csr_create(dma_queue_csr_t* csr, void* bar, uint64_t base, dma_pool_t* pool) {
     csr->reg_start_addr         = (uint64_t*)((uint64_t)bar + base + 0x08);
     csr->reg_consumed_head_addr = (uint64_t*)((uint64_t)bar + base + 0x20);
     csr->reg_enable             = (uint32_t*)((uint64_t)bar + base + 0x00);
@@ -53,8 +76,8 @@ void dma_queue_csr_create(dma_queue_csr_t* csr, void* bar, uint64_t base) {
     csr->reg_payload_count      = (uint32_t*)((uint64_t)bar + base + 0x44);
     csr->reg_reset              = (uint32_t*)((uint64_t)bar + base + 0x48);
 
-    csr->virtual_ring_base = 0x100000;
     csr->is_d2h = base < DMA_H2D_QUEUE_CSR_BASE;
+    csr->pool = pool;
 }
 
 int dma_queue_csr_reset(dma_queue_csr_t* csr) {
@@ -97,22 +120,13 @@ static void dma_descriptor_write(
         ((link & 0b1) << 63);
 }
 
-int dma_queue_csr_start(dma_queue_csr_t* csr, vfio_group_t* vfio_group, uint32_t ring_width) {
-    
+int dma_queue_csr_start(
+    dma_queue_csr_t* csr,
+    uint64_t ring_offset,
+    uint32_t ring_width
+) {
     csr->size = (1 << ring_width);
-
-    csr->pool = mmap(
-        0,
-        DMA_POOL_SIZE,
-        PROT_READ | PROT_WRITE,
-        MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB,
-        0,
-        0
-    );
-    csr->ring = (uint64_t*)(csr->pool);
-    csr->buffer = (void*)((uint64_t)csr->pool + csr->size * DMA_DESCRIPTOR_SIZE);
-    if (vfio_group_map_create(vfio_group, csr->pool, DMA_POOL_SIZE, csr->virtual_ring_base)) return -1;
-
+    csr->ring = (uint64_t*)((uint64_t)(csr->pool->mem) + ring_offset);
     csr->tail = 1;
     csr->last_tail = 1;
     csr->completed = 1;
@@ -122,7 +136,7 @@ int dma_queue_csr_start(dma_queue_csr_t* csr, vfio_group_t* vfio_group, uint32_t
     dma_descriptor_write(
         csr,
         csr->size,
-        csr->virtual_ring_base,
+        csr->pool->virtual_base + ring_offset,
         0,
         TRANSFER_BYTES,
         (uint64_t)csr->tail,
@@ -136,7 +150,7 @@ int dma_queue_csr_start(dma_queue_csr_t* csr, vfio_group_t* vfio_group, uint32_t
     );
 
     if (dma_queue_csr_reset(csr) < 0) return -2;
-    *csr->reg_start_addr    = csr->virtual_ring_base;
+    *csr->reg_start_addr    = csr->pool->virtual_base + ring_offset;
     *csr->reg_size          = ring_width;
     *csr->reg_batch_delay   = BATCH_DELAY;
     *csr->reg_enable        = 1;
@@ -182,9 +196,9 @@ int dma_queue_csr_transfer(
     uint64_t num_bytes
 ) {
     if (csr->is_d2h) {
-        dst_addr = dst_addr - ((uint64_t)csr->pool) + csr->virtual_ring_base;
+        dst_addr = dst_addr - ((uint64_t)csr->pool->mem) + csr->pool->buffer_offset;
     } else {
-        src_addr = src_addr - ((uint64_t)csr->pool) + csr->virtual_ring_base;
+        src_addr = src_addr - ((uint64_t)csr->pool->mem) + csr->pool->buffer_offset;
     }
 
     uint32_t room = 0;

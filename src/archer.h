@@ -18,6 +18,10 @@
 #define N_AMEM_WORDS        2048
 #define VIRT_BAR_BASE_2     0x4000000000
 #define VIRT_BAR_BASE_4     0x8000000000
+#define DMA_RING_WIDTH      7
+#define N_DMA_RINGS         2
+#define DMA_RING_SIZE       ((1 << DMA_RING_WIDTH) * DMA_DESCRIPTOR_SIZE)
+#define POOL_BUFFER_OFFSET  (DMA_RING_SIZE * N_DMA_RINGS)
 
 #define N_PCHANNELS 32
 static uint64_t PCHANNEL_BASES[N_PCHANNELS] = {
@@ -65,6 +69,7 @@ typedef struct {
     volatile uint16_t*  n_results;
     volatile uint32_t*  rmem_pop;
     dma_global_csr_t    dma_global_csr;
+    dma_pool_t          dma_pool;
     dma_queue_csr_t     dma_h2d;
     dma_queue_csr_t     dma_d2h;
     __m512i*            pchannels[N_PCHANNELS];

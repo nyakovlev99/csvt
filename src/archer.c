@@ -51,11 +51,28 @@ int archer_enumerate(
         dma_version_t dma_version;
         dma_global_csr_version(&(archer->dma_global_csr), &dma_version);
 
-        dma_queue_csr_create(&(archer->dma_h2d), archer->vfio_device.regions[DMA_BAR].mem, DMA_H2D_QUEUE_CSR_BASE);
-        dma_queue_csr_create(&(archer->dma_d2h), archer->vfio_device.regions[DMA_BAR].mem, DMA_D2H_QUEUE_CSR_BASE);
+        if (dma_pool_create(
+            &(archer->dma_pool),
+            &(archer->vfio_group),
+            0x10000 + DMA_POOL_SIZE * i,
+            POOL_BUFFER_OFFSET
+        ) < 0) return -9;
 
-        if (dma_queue_csr_start(&(archer->dma_h2d), &(archer->vfio_group), 7) < 0) return -8;
-        if (dma_queue_csr_start(&(archer->dma_d2h), &(archer->vfio_group), 7) < 0) return -9;
+        dma_queue_csr_create(
+            &(archer->dma_h2d),
+            archer->vfio_device.regions[DMA_BAR].mem,
+            DMA_H2D_QUEUE_CSR_BASE,
+            &(archer->dma_pool)
+        );
+        dma_queue_csr_create(
+            &(archer->dma_d2h),
+            archer->vfio_device.regions[DMA_BAR].mem,
+            DMA_D2H_QUEUE_CSR_BASE,
+            &(archer->dma_pool)
+        );
+
+        if (dma_queue_csr_start(&(archer->dma_h2d), 0, 7) < 0) return -10;
+        if (dma_queue_csr_start(&(archer->dma_d2h), DMA_RING_SIZE, 7) < 0) return -11;
 
         printf(
             "Archer device: %s (vfio:%s); id_dat=%016lx, dma version: %02x.%02x.%02x\n",
