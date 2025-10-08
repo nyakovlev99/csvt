@@ -1,8 +1,10 @@
 #include "dma.h"
 #include "pci_utils.h"
 #include "vfio_utils.h"
+#include <stdint.h>
 #include <stdio.h>
 #include <immintrin.h>
+#include <stdlib.h>
 #include <unistd.h>
 #include <pthread.h>
 
@@ -100,17 +102,17 @@ void* run_archer_threaded(void* arg) {
         _mm512_store_si512(&(amem[i]), ((i / 4) % 2 == 0) ? amem_pattern_1 : amem_pattern_2);
     }
 
-    pthread_mutex_lock(&stdout_lock);
-    printf("Loading HBM...\n");
-    pthread_mutex_unlock(&stdout_lock);
-    __m512i hbm_pattern_1 = _mm512_set1_epi16(0xaaaa);
-    __m512i hbm_pattern_2 = _mm512_set1_epi16(0x5555);
-    for (int i=0; i<N_PCHANNELS; i++) {
-        __m512i* pchan = archer->pchannels[i];
-        for (int j=0; j<131072; j++) {
-            _mm512_store_si512(&(pchan[j]), (i % 2 == 0) ? hbm_pattern_1 : hbm_pattern_2);
-        }
-    }
+    // pthread_mutex_lock(&stdout_lock);
+    // printf("Loading HBM...\n");
+    // pthread_mutex_unlock(&stdout_lock);
+    // __m512i hbm_pattern_1 = _mm512_set1_epi16(0xaaaa);
+    // __m512i hbm_pattern_2 = _mm512_set1_epi16(0x5555);
+    // for (int i=0; i<N_PCHANNELS; i++) {
+    //     __m512i* pchan = archer->pchannels[i];
+    //     for (int j=0; j<131072; j++) {
+    //         _mm512_store_si512(&(pchan[j]), (i % 2 == 0) ? hbm_pattern_1 : hbm_pattern_2);
+    //     }
+    // }
 
     pthread_mutex_lock(&stdout_lock);
     printf("Running workload...\n");
@@ -140,6 +142,22 @@ void* run_archer_threaded(void* arg) {
 }
 
 int run_main(int argc, char** argv) {
+    printf("Checking system requirements...\n");
+
+    char cmd_output[1024];
+    FILE* fp = popen("cat /proc/meminfo | grep HugePages_Total | cut -d: -f2 | awk '{$1=$1}1'", "r");
+    if (fgets(cmd_output, sizeof(cmd_output), fp) == NULL) {
+        fprintf(stderr, "Failed to read hugepage output\n");
+        return -1;
+    }
+    pclose(fp);
+    int n_hugepages = atoi(cmd_output);
+    printf("Hugepages: %d\n", n_hugepages);
+    if (n_hugepages <= 0) {
+        fprintf(stderr, "Invalid hugepages: %d\n", n_hugepages);
+        return -2;
+    }
+
     printf("Running stress test...\n");
 
     int                 n_devices;
@@ -185,13 +203,18 @@ int run_main(int argc, char** argv) {
         archer->acmd        = (uint64_t*)((uint64_t)(archer->vfio_device.regions[CSR_BAR].mem) + 0x700300);
         archer->n_results   = (uint16_t*)((uint64_t)(archer->vfio_device.regions[CSR_BAR].mem) + 0x700400);
         archer->rmem_pop    = (uint32_t*)((uint64_t)(archer->vfio_device.regions[CSR_BAR].mem) + RMEM_BASE);
-        for (int pchan_idx=0; pchan_idx<N_PCHANNELS; pchan_idx++) {
-            archer->pchannels[pchan_idx] = (__m512i*)((uint64_t)(archer->vfio_device.regions[HBM_BAR].mem) + PCHANNEL_BASES[pchan_idx]);
-        }
+        // for (int pchan_idx=0; pchan_idx<N_PCHANNELS; pchan_idx++) {
+        //     archer->pchannels[pchan_idx] = (__m512i*)((uint64_t)(archer->vfio_device.regions[HBM_BAR].mem) + PCHANNEL_BASES[pchan_idx]);
+        // }
 
         dma_global_csr_create(&(archer->dma_global_csr), archer->vfio_device.regions[DMA_BAR].mem);
 
-        printf("ID_DAT: %016lx\n", *archer->id_dat);
+        uint64_t id_dat = *archer->id_dat;
+        printf("ID_DAT: %016lx\n", id_dat);
+        if (id_dat == 0xffffffffffffffff) {
+            fprintf(stderr, "Invalid ID_DAT; bitfile may need to be reloaded.\n");
+            return -8;
+        }
         dma_version_t dma_version;
         dma_global_csr_version(&(archer->dma_global_csr), &dma_version);
         printf("DMA Version: %02x.%02x.%02x\n", dma_version.major, dma_version.minor, dma_version.patch);
