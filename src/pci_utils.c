@@ -77,6 +77,10 @@ int pci_enumerate_devices(uint16_t vendor_id, pci_device_t* devices, int max_dev
         ) == 0);
         
         _iommu_group = pci_get_string_property(dev, PCI_FILL_IOMMU_GROUP);
+        if (_iommu_group == NULL) {
+            fprintf(stderr, "Failed to determine IOMMU group of device %02x:%02x.%d; is IOMMU enabled?\n", device->bus, device->slot, device->function);
+            return -1;
+        }
         strncpy(device->iommu_group, _iommu_group, IOMMU_NAME_SIZE);
         
         *n_devices = *n_devices + 1;

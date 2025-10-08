@@ -236,7 +236,7 @@ int run_main(int argc, char** argv) {
 int main(int argc, char** argv) {
     int ret = run_main(argc, argv);
     if (ret != 0) {
-        printf("Command failed (%d)", ret);
+        printf("Command failed (%d)\n", ret);
     }
     return ret;
 }
