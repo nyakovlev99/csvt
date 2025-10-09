@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <immintrin.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 #include <pthread.h>
 
@@ -188,6 +189,20 @@ int run_main(int argc, char** argv) {
             pci_device->slot,
             pci_device->function
         );
+
+        char cmd[1024];
+        snprintf(cmd, 1024, "basename `readlink /sys/bus/pci/devices/%s/driver`", dbdf);
+        fp = popen(cmd, "r");
+        if (fgets(cmd_output, sizeof(cmd_output), fp) == NULL) {
+            fprintf(stderr, "Failed to detect driver for %s; is it bound to one?\n", dbdf);
+            return -1;
+        }
+        pclose(fp);
+        printf("Device %s is bound to driver: %s\n", dbdf, cmd_output);
+        if (strncmp(cmd_output, "vfio-pci", 8) != 0) {
+            fprintf(stderr, "Device %s has incorrect driver %s\n", dbdf, cmd_output);
+            return -2;
+        }
 
         printf("Connecting to %s (%s)\n", dbdf, vfio_path);
 
