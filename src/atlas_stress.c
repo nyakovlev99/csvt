@@ -75,6 +75,7 @@ static uint64_t PCHANNEL_BASES[N_PCHANNELS] = {
 };
 
 typedef struct {
+    char                dbdf[32];
     pci_device_t*       pci_device;
     vfio_group_t        vfio_group;
     vfio_device_t       vfio_device;
@@ -83,6 +84,8 @@ typedef struct {
     volatile uint64_t*  acmd;
     volatile uint16_t*  n_results;
     volatile uint32_t*  rmem_pop;
+    volatile uint8_t*   hbm_north_temp;
+    volatile uint8_t*   hbm_south_temp;
     dma_global_csr_t    dma_global_csr;
     __m512i*            pchannels[N_PCHANNELS];
 } archer_t;
@@ -178,11 +181,10 @@ int run_main(int argc, char** argv) {
         pci_device_t*   pci_device = &(pci_devices[i]);
         archer_t*       archer = &(archers[i]);
         char            vfio_path[128];
-        char            dbdf[32];
 
         sprintf(vfio_path, "/dev/vfio/%s", pci_device->iommu_group);
         sprintf(
-            dbdf, 
+            archer->dbdf, 
             "%04x:%02x:%02x.%d",
             pci_device->domain,
             pci_device->bus,
@@ -191,23 +193,23 @@ int run_main(int argc, char** argv) {
         );
 
         char cmd[1024];
-        snprintf(cmd, 1024, "basename `readlink /sys/bus/pci/devices/%s/driver`", dbdf);
+        snprintf(cmd, 1024, "basename `readlink /sys/bus/pci/devices/%s/driver`", archer->dbdf);
         fp = popen(cmd, "r");
         if (fgets(cmd_output, sizeof(cmd_output), fp) == NULL) {
-            fprintf(stderr, "Failed to detect driver for %s; is it bound to one?\n", dbdf);
+            fprintf(stderr, "Failed to detect driver for %s; is it bound to one?\n", archer->dbdf);
             return -1;
         }
         pclose(fp);
-        printf("Device %s is bound to driver: %s\n", dbdf, cmd_output);
+        printf("Device %s is bound to driver: %s\n", archer->dbdf, cmd_output);
         if (strncmp(cmd_output, "vfio-pci", 8) != 0) {
-            fprintf(stderr, "Device %s has incorrect driver %s\n", dbdf, cmd_output);
+            fprintf(stderr, "Device %s has incorrect driver %s\n", archer->dbdf, cmd_output);
             return -2;
         }
 
-        printf("Connecting to %s (%s)\n", dbdf, vfio_path);
+        printf("Connecting to %s (%s)\n", archer->dbdf, vfio_path);
 
         if (vfio_group_create(&(archer->vfio_group), &ctr, vfio_path) < 0) return -3;
-        if (vfio_device_add(&(archer->vfio_device), &(archer->vfio_group), dbdf) < 0) return -4;
+        if (vfio_device_add(&(archer->vfio_device), &(archer->vfio_group), archer->dbdf) < 0) return -4;
         if (vfio_device_region_attach(&(archer->vfio_device), DMA_BAR) < 0) return -5;
         if (vfio_device_region_attach(&(archer->vfio_device), CSR_BAR) < 0) return -6;
         if (vfio_device_region_attach(&(archer->vfio_device), HBM_BAR) < 0) return -7;
@@ -218,6 +220,10 @@ int run_main(int argc, char** argv) {
         archer->acmd        = (uint64_t*)((uint64_t)(archer->vfio_device.regions[CSR_BAR].mem) + 0x700300);
         archer->n_results   = (uint16_t*)((uint64_t)(archer->vfio_device.regions[CSR_BAR].mem) + 0x700400);
         archer->rmem_pop    = (uint32_t*)((uint64_t)(archer->vfio_device.regions[CSR_BAR].mem) + RMEM_BASE);
+
+        archer->hbm_north_temp = (uint8_t*)((uint64_t)(archer->vfio_device.regions[HBM_BAR].mem) + 0x0c00000100);
+        archer->hbm_south_temp = (uint8_t*)((uint64_t)(archer->vfio_device.regions[HBM_BAR].mem) + 0x1c00000100);
+
         // for (int pchan_idx=0; pchan_idx<N_PCHANNELS; pchan_idx++) {
         //     archer->pchannels[pchan_idx] = (__m512i*)((uint64_t)(archer->vfio_device.regions[HBM_BAR].mem) + PCHANNEL_BASES[pchan_idx]);
         // }
@@ -240,9 +246,13 @@ int run_main(int argc, char** argv) {
         archer_t* archer = &(archers[i]);
         pthread_create(&(threads[i]), NULL, run_archer_threaded, archer);
     }
-
+    
     while (1) {
-        sleep(1);
+        for (int i=0; i<n_devices; i++) {
+            archer_t* archer = &(archers[i]);
+            printf("{\"dbdf\": \"%s\", \"hbm_north_deg_c\": %d, \"hbm_south_deg_c\": %d}\n", archer->dbdf, *archer->hbm_north_temp, *archer->hbm_south_temp);
+        }
+        sleep(5);
     }
 
     return 0;
